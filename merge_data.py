@@ -1,136 +1,128 @@
 import os
-import json
-import csv
 import pandas as pd
-import itertools
-
-folder_path = './'
-output_csv = 'output.csv'
-is_txt_header = True
-all_rows = []
-base_fields = []
-processed_files = set()
-not_extracted_files = []
+import json
+import re
 
 
-def print_logo():
-    logo = '''
-    _____.___..___ _____.___..___        
-    \__  |   ||   |\__  |   ||   |       
-     /   |   ||   | /   |   ||   |       
-     \____   ||   | \____   ||   |       
-     / ______||___| / ______||___| ______
-     \/             \/            /_____/
-     '''
-    print(logo)
+# JSON
+def extract_json_fields(file):
+    with open(file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        if isinstance(data, list) and data:
+            return list(data[0].keys()), pd.DataFrame(data)
+        return list(data.keys()), pd.DataFrame([data])
 
 
-def check_additional_fields(current_fields):
-    global base_fields
-    if current_fields is None:
-        return
-    additional_fields = [field for field in current_fields if field not in base_fields]
-    if additional_fields:
-        print(f' 发现新字段{additional_fields}')
-        include_fields = input(f" 是否将字段 [{', '.join(additional_fields)}] 包含到CSV中？(y/n): ").lower()
-        if include_fields == 'y':
-            base_fields.extend(additional_fields)
-            base_fields.sort()
+# SQL
+def extract_sql_fields(file):
+    with open(file, 'r', encoding='utf-8') as f:
+        content = f.read()
+        pattern = r'CREATE TABLE\s+\w+\s*\((.*?)\);'
+        matches = re.findall(pattern, content, re.DOTALL)
+        fields = []
+        for match in matches:
+            field_lines = match.split(',')
+            for line in field_lines:
+                field_name = line.strip().split()[0]
+                fields.append(field_name)
+        return fields, pd.DataFrame()  # 返回空数据框
 
 
-def process_file(file_path, file_type):
-    global base_fields, all_rows
+# 文件读取
+def read_file(file):
+    ext = os.path.splitext(file)[1].lower()
 
-    if file_type == '.csv':
-        with open(file_path, 'r', encoding='utf-8-sig') as infile:
-            reader = csv.DictReader(infile)
-            check_additional_fields(reader.fieldnames)
-            for row in reader:
-                all_rows.append([row.get(field, '') for field in base_fields])
-        print(f"CSV 文件 {file_path} 提取完毕")
-    elif file_type in ['.xlsx', '.xls', '.xlsm']:
-        try:
-            df = pd.read_excel(file_path)
-            current_fields = df.columns.tolist()
-            check_additional_fields(current_fields)
-            for index, row in df.iterrows():
-                all_rows.append([row.get(field, '') for field in base_fields])
-        except Exception as e:
-            print(f"读取Excel文件时出错: {e}")
-        print(f"Excel 文件 {file_path} 提取完毕")
-    elif file_type == '.json':
-        with open(file_path, 'r', encoding='utf-8') as infile:
-            data = json.load(infile)
-            if isinstance(data, list):
-                check_additional_fields(data[0].keys())
-                for entry in data:
-                    all_rows.append([entry.get(field, '') for field in base_fields])
-            elif isinstance(data, dict):
-                check_additional_fields(data.keys())
-                all_rows.append([data.get(field, '') for field in base_fields])
-        print(f"JSON 文件 {file_path} 提取完毕")
-    elif file_type == '.sql':
-        with open(file_path, 'r', encoding='utf-8') as infile:
-            sql_lines = infile.readlines()
-            for line in sql_lines:
-                if line.strip().lower().startswith("insert into"):
-                    values_part = line.split("VALUES")[1].strip().strip("();")
-                    values = [v.strip().strip("'") for v in values_part.split(',')]
-                    all_rows.append(
-                        [values[i] if i < len(values) else '' for i in range(len(base_fields))])
-        print(f"SQL 文件 {file_path} 提取完毕")
-    elif file_type == '.txt':
-        with open(file_path, 'r', encoding='utf-8') as infile:
-            lines = infile.readlines()
-            header_handled = False
-            for row in lines:
-                fields = [item.strip() for item in row.strip().split('\t')]
-                if not any(fields):
-                    continue
-                if not header_handled and is_txt_header:
-                    if base_fields == []:
-                        base_fields = fields
-                    else:
-                        check_additional_fields(fields)
-                    header_handled = True
-                else:
-                    fields = [field if field else '' for field in fields]
-                    fields = list(itertools.zip_longest(*[fields], fillvalue=''))[:len(base_fields)]
-                    all_rows.append(fields)
-        print(f"TXT 文件 {file_path} 提取完毕")
+    if ext == '.csv':
+        df = pd.read_csv(file, encoding='utf-8')
+        return df.columns.tolist(), df
+
+    elif ext in ['.xlsx', '.xls', '.xlsm']:
+        df = pd.read_excel(file)
+        return df.columns.tolist(), df
+
+    elif ext == '.json':
+        return extract_json_fields(file)
+
+    elif ext == '.sql':
+        return extract_sql_fields(file)
+
+    return None, None
 
 
-def process_files():
-    global base_fields, all_rows, processed_files, not_extracted_files
+def ask_yes_no(question):
+    answer = input(question)
+    return answer.lower() in ['y', 'yes', '']
 
-    file_types = ['.csv', '.xlsx', '.json', '.sql', '.txt', '.xls', '.xlsm']
 
-    files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
-
-    for filename in sorted(files):
-        current_file_path = os.path.join(folder_path, filename)
-        file_type = os.path.splitext(filename)[1]
-
-        if filename.endswith(tuple(file_types)):
-            processed_files.add(current_file_path)
-            print(f'当前提取文件{filename}... ')
-            process_file(current_file_path, file_type)
+def merge_files_to_csv():
+    if os.path.isfile('output.csv'):
+        if ask_yes_no("💥output.csv 文件已存在，是否删除它？ (y/n): "):
+            os.remove('output.csv')
+            print("❌output.csv 已被删除。")
         else:
-            not_extracted_files.append(filename)
+            print("💟将保留现有的 output.csv 文件。")
+            return
+
+    categories = {
+        'CSV': ['.csv'],
+        'Excel': ['.xlsx', '.xls', '.xlsm'],
+        'JSON': ['.json'],
+        'SQL': ['.sql']
+    }
+
+    all_files = []
+
+    # 分类
+    for filename in os.listdir('.'):
+        if os.path.isfile(filename):
+            ext = os.path.splitext(filename)[1].lower()
+            for category, extensions in categories.items():
+                if ext in extensions:
+                    all_files.append(filename)
+                    break
+
+    merged_data = {}
+    field_names = []
+    max_length = 0  # 追踪最长数据列
+
+    for file in all_files:
+        print(f"👾Reading file: {file}")
+        fields, data = read_file(file)
+
+        # 字段
+        missing_fields = []
+        for field in fields:
+            if field not in field_names:
+                missing_fields.append(field)
+
+        if missing_fields:
+            field_str = '、'.join(missing_fields)
+            if ask_yes_no(f"💕Fields '{field_str}' not found in merged fields. Do you want to add them? (y/n): "):
+                field_names.extend(missing_fields)
+                for field in missing_fields:
+                    merged_data[field] = []
+
+        # 长度一致
+        if data is not None:
+            for field in field_names:
+                if field in fields:
+                    merged_data[field].extend(data[field].tolist())
+                else:
+                    merged_data[field].extend([None] * len(data))
+
+            max_length = max(max_length, len(data))
+
+    # 填补较短列
+    for field in field_names:
+        if len(merged_data[field]) < max_length:
+            merged_data[field].extend([None] * (max_length - len(merged_data[field])))
+
+    # 创建DataFrame 去除空行 输出
+    output_df = pd.DataFrame(merged_data)
+    output_df.dropna(how='all', inplace=True)  # 删除空行
+    output_df.to_csv('output.csv', index=False, encoding='utf-8-sig')
+    print("😆Merged data has been written to output.csv.")
 
 
-def write_to_csv():
-    global base_fields, all_rows
-    all_rows = [row for row in all_rows if any(row)]
-    with open(output_csv, 'w', newline='', encoding='utf-8-sig') as csvfile:
-        csv_writer = csv.writer(csvfile, quotechar='"', quoting=csv.QUOTE_MINIMAL)
-        csv_writer.writerow(base_fields)
-        csv_writer.writerows(all_rows)
-
-
-if __name__ == '__main__':
-    print_logo()
-    process_files()
-    write_to_csv()
-    print('Done~ ')
-    print("未提取的文件 ：", list(set(not_extracted_files)))
+if __name__ == "__main__":
+    merge_files_to_csv()
