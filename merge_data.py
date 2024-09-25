@@ -83,39 +83,33 @@ def merge_files_to_csv():
 
     merged_data = {}
     field_names = []
-    max_length = 0  # 追踪最长数据列
 
-    for file in all_files:
+    # 第一次读取文件，获取所有字段
+    first_file = all_files[0]
+    print(f"👾Reading file: {first_file}")
+    fields, data = read_file(first_file)
+    field_names.extend(fields)
+    for field in fields:
+        merged_data[field] = []
+
+    # 循环读取其他文件，填充数据
+    for file in all_files[1:]:
         print(f"👾Reading file: {file}")
         fields, data = read_file(file)
 
-        # 字段
-        missing_fields = []
+        # 填充多余字段
         for field in fields:
             if field not in field_names:
-                missing_fields.append(field)
+                field_names.append(field)
+                merged_data[field] = [None] * len(merged_data[field_names[0]])
 
-        if missing_fields:
-            field_str = '、'.join(missing_fields)
-            if ask_yes_no(f"💕Fields '{field_str}' not found in merged fields. Do you want to add them? (y/n): "):
-                field_names.extend(missing_fields)
-                for field in missing_fields:
-                    merged_data[field] = []
-
-        # 长度一致
-        if data is not None:
-            for field in field_names:
-                if field in fields:
-                    merged_data[field].extend(data[field].tolist())
-                else:
-                    merged_data[field].extend([None] * len(data))
-
-            max_length = max(max_length, len(data))
-
-    # 填补较短列
-    for field in field_names:
-        if len(merged_data[field]) < max_length:
-            merged_data[field].extend([None] * (max_length - len(merged_data[field])))
+                # 填充数据
+        for field in field_names:
+            if field in fields:
+                merged_data[field].extend(data[field].tolist())
+            else:
+                # 如果字段缺失，则填充 None，长度与已合并数据一致
+                merged_data[field].extend([None] * len(data))
 
     # 创建DataFrame 去除空行 输出
     output_df = pd.DataFrame(merged_data)
